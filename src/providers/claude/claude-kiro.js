@@ -19,6 +19,12 @@ import {
 import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { isRetryableNetworkError, MODEL_PROVIDER, formatExpiryLog, getNormalizedErrorResponseText, buildHttpErrorReason, normalizeProviderErrorMessage, createEmptyUpstreamResponseError } from '../../utils/common.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
+import { buildKiroAdditionalModelRequestFields } from './kiro-effort.js';
+import {
+    isKiroBuilderIdAuth,
+    resolveKiroRequestProfileArn,
+    shouldRetryBuilderWithoutProfile
+} from './kiro-profile.js';
 
 const KIRO_THINKING = {
     MIN_BUDGET_TOKENS: 1024,
@@ -36,6 +42,7 @@ const KIRO_CONSTANTS = {
     REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',
     BASE_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
     BASE_RUNTIME_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
+    CODEWHISPERER_BASE_URL: 'https://codewhisperer.{{region}}.amazonaws.com/generateAssistantResponse',
     // 路径大小写敏感，小写会返回 UnknownOperationException
     LIST_PROFILES_URL: 'https://codewhisperer.{{region}}.amazonaws.com/ListAvailableProfiles',
     DEFAULT_MODEL_NAME: 'claude-sonnet-4-5',
@@ -719,6 +726,38 @@ export class KiroApiService {
         return configureTLSSidecar(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.KIRO_API);
     }
 
+    async _requestWithBuilderEndpointFallback(axiosConfig, requestData) {
+        try {
+            return await this.axiosInstance.request(axiosConfig);
+        } catch (error) {
+            const shouldFallback = shouldRetryBuilderWithoutProfile({
+                authMethod: this.authMethod,
+                profileArn: requestData.profileArn,
+                status: error.response?.status,
+                requestUrl: axiosConfig.url
+            });
+            if (!shouldFallback) {
+                throw error;
+            }
+
+            // Axios exposes an error response as a stream for streaming calls.
+            // Close it before opening the fallback request so the socket is released.
+            if (error.response?.data && typeof error.response.data.destroy === 'function') {
+                error.response.data.destroy();
+            }
+
+            const fallbackData = { ...requestData };
+            delete fallbackData.profileArn;
+            const fallbackConfig = {
+                ...axiosConfig,
+                url: this.codewhispererBaseUrl,
+                data: fallbackData
+            };
+            logger.warn('[Kiro] Builder ID request was rejected by the q endpoint; retrying CodeWhisperer without profileArn.');
+            return await this.axiosInstance.request(fallbackConfig);
+        }
+    }
+
 /**
  * 加载凭证信息（不执行刷新）
  */
@@ -842,8 +881,9 @@ async loadCredentials() {
         this.refreshUrl = (this.config.KIRO_REFRESH_URL || KIRO_CONSTANTS.REFRESH_URL).replace("{{region}}", this.region);
         this.refreshIDCUrl = (this.config.KIRO_REFRESH_IDC_URL || KIRO_CONSTANTS.REFRESH_IDC_URL).replace("{{region}}", this.idcRegion);
         this.baseUrl = (this.config.KIRO_BASE_URL || defaultBaseUrl).replace("{{region}}", this.region);
+        this.codewhispererBaseUrl = KIRO_CONSTANTS.CODEWHISPERER_BASE_URL.replace("{{region}}", this.region);
 
-        // profileArn 与上面的 region / baseUrl 同属凭证装载期的派生，下游不再判断登录方式。
+        // Enterprise IdC 的 profileArn 在凭证装载期发现；Builder ID 使用请求级回退值。
         await this._ensureProfileArn(isSocialAuth);
     } catch (error) {
         logger.warn(`[Kiro Auth] Error during credential loading: ${error.message}`);
@@ -853,8 +893,8 @@ async loadCredentials() {
 /**
  * 解析 this.profileArn（唯一决策点）。
  * profileArn 是 CodeWhisperer 的订阅归属标识，缺失时上游返回 403 AccessDeniedException。
- * social 凭证由 Kiro auth 服务随刷新响应下发该字段；IdC / builder-id 走 AWS SSO OIDC，
- * 响应不包含它，需自行查询。
+ * social 凭证由 Kiro auth 服务随刷新响应下发该字段；Enterprise IdC 的刷新响应
+ * 不包含它，需要自行查询。Builder ID 不支持查询，改由生成请求使用固定回退值。
  * @param {boolean} isSocialAuth
  * @private
  */
@@ -863,8 +903,9 @@ async _ensureProfileArn(isSocialAuth) {
         return;
     }
 
-    // social token 非 AWS 签发，ListAvailableProfiles 对它不适用；缺失时原样交给下游。
-    if (isSocialAuth) {
+    // social token 非 AWS 签发，ListAvailableProfiles 对它不适用。
+    // Builder ID 同样明确不支持该接口；生成请求会使用请求级回退 ARN。
+    if (isSocialAuth || isKiroBuilderIdAuth(this.authMethod)) {
         return;
     }
 
@@ -1285,37 +1326,6 @@ async saveCredentialsToFile(filePath, newData) {
     /**
      * Build CodeWhisperer request from OpenAI messages
      */
-
-    _isReasoningModel(model) {
-        if (!model) return false;
-        const m = model.toLowerCase();
-        return m.includes('gpt-5.6') || m.includes('gpt-5_6');
-    }
-
-    _resolveEffort(model, thinking, outputConfig = null, reasoningEffort = null) {
-        const explicitEffort = reasoningEffort || outputConfig?.effort;
-        const isReasoning = this._isReasoningModel(model);
-
-        if (isReasoning) {
-            if (thinking?.type === 'disabled') return 'none';
-            if (explicitEffort) {
-                const valid = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
-                return valid.includes(explicitEffort.toLowerCase()) ? explicitEffort.toLowerCase() : 'high';
-            }
-            return ''; // Omit so backend uses default 'high'
-        }
-
-        if (explicitEffort) {
-            const valid = ['low', 'medium', 'high', 'xhigh', 'max'];
-            return valid.includes(explicitEffort.toLowerCase()) ? explicitEffort.toLowerCase() : 'medium';
-        }
-
-        if (thinking && (thinking.type === 'enabled' || thinking.type === 'adaptive')) {
-            return 'medium';
-        }
-
-        return '';
-    }
 
     async buildCodewhispererRequest(messages, model, tools = null, inSystemPrompt = null, thinking = null, outputConfig = null, reasoningEffort = null) {
         const conversationId = uuidv4();
@@ -1827,23 +1837,19 @@ async saveCredentialsToFile(filePath, newData) {
 
         request.conversationState.currentMessage.userInputMessage = userInputMessage;
 
-        const resolvedEffort = this._resolveEffort(codewhispererModel, thinking, outputConfig, reasoningEffort);
-        if (resolvedEffort) {
-            if (this._isReasoningModel(codewhispererModel)) {
-                request.additionalModelRequestFields = {
-                    reasoning: { effort: resolvedEffort }
-                };
-            } else {
-                request.additionalModelRequestFields = {
-                    output_config: { effort: resolvedEffort }
-                };
-            }
+        const additionalModelRequestFields = buildKiroAdditionalModelRequestFields(
+            codewhispererModel,
+            thinking,
+            outputConfig,
+            reasoningEffort
+        );
+        if (additionalModelRequestFields) {
+            request.additionalModelRequestFields = additionalModelRequestFields;
         }
 
-        // != null 而非 truthy：social 凭证可能把 profileArn 落地成空串
-        // （kiro-oauth.js 的 `data.profileArn || ''`），保持请求体不变。
-        if (this.profileArn != null) {
-            request.profileArn = this.profileArn;
+        const requestProfileArn = resolveKiroRequestProfileArn(this.authMethod, this.profileArn);
+        if (requestProfileArn != null) {
+            request.profileArn = requestProfileArn;
         }
 
         Object.defineProperty(request, '_kiroToolNameMaps', {
@@ -2025,7 +2031,7 @@ async saveCredentialsToFile(filePath, newData) {
             const releaseThrottle = await acquireKiroRequestSlot(this.config);
             let response;
             try {
-                response = await this.axiosInstance.request(axiosConfig);
+                response = await this._requestWithBuilderEndpointFallback(axiosConfig, requestData);
             } finally {
                 releaseThrottle();
             }
@@ -2635,7 +2641,7 @@ async saveCredentialsToFile(filePath, newData) {
             };
             this._applySidecar(axiosConfig);
             releaseThrottle = await acquireKiroRequestSlot(this.config);
-            const response = await this.axiosInstance.request(axiosConfig);
+            const response = await this._requestWithBuilderEndpointFallback(axiosConfig, requestData);
 
             stream = response.data;
             let buffer = Buffer.alloc(0);
