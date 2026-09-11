@@ -1,35 +1,30 @@
-export const KIRO_BUILDER_ID_FALLBACK_PROFILE_ARN =
-    'arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX';
-
 export function isKiroBuilderIdAuth(authMethod) {
     const normalized = String(authMethod || '').toLowerCase().replace(/[_\s]/g, '-');
     return normalized === 'builder-id' || normalized === 'builderid';
 }
 
 /**
- * Builder ID has no discoverable profile, but Kiro's q.* streaming endpoint
- * currently requires the fixed ARN used by the official client. Keep it
- * request-local: it is a routing placeholder, not an account profile.
+ * Builder ID has no discoverable profile. Keep any real profile supplied by
+ * the credential, but never manufacture or persist a placeholder ARN.
  */
 export function resolveKiroRequestProfileArn(authMethod, profileArn) {
     if (typeof profileArn === 'string' && profileArn.trim() !== '') {
         return profileArn;
     }
     if (isKiroBuilderIdAuth(authMethod)) {
-        return KIRO_BUILDER_ID_FALLBACK_PROFILE_ARN;
+        return undefined;
     }
     return profileArn;
 }
 
 /**
- * Some CodeWhisperer deployments reject the Builder ID placeholder even though
- * q.* requires it. A 403 from q.* is safe to retry before a stream starts by
- * switching to CodeWhisperer and omitting the placeholder.
+ * The q.* generation endpoint can require profileArn, while the legacy
+ * CodeWhisperer endpoint accepts Builder ID without one. Route only profileless
+ * Builder ID requests; credentials with a real profile keep the normal route.
  */
-export function shouldRetryBuilderWithoutProfile({ authMethod, profileArn, status, requestUrl }) {
+export function shouldRouteBuilderToCodeWhisperer({ authMethod, profileArn, requestUrl }) {
     if (!isKiroBuilderIdAuth(authMethod) ||
-        profileArn !== KIRO_BUILDER_ID_FALLBACK_PROFILE_ARN ||
-        status !== 403) {
+        (typeof profileArn === 'string' && profileArn.trim() !== '')) {
         return false;
     }
 
