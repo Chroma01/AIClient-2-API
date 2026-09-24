@@ -177,6 +177,19 @@
   </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
+      <a href="https://www.runninghub.ai/call-api?source=github">
+        <img src="static/runninghub.png" alt="RunningHub Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      <strong>RUNNINGHUB API</strong> — Access 400+ leading AI models via API - Seedance, Kling, MiniMax, Nano Banana, Veo, and more - at highly competitive prices.<br>
+      <code>High-Concurrency Support</code> <code>Free API Testing</code> <code>End-to-End Encryption</code> · <a href="https://www.runninghub.ai/call-api?source=github"><strong>👉 Test the API for Free</strong></a><br>
+      Get full-powered Seedance API access at rock-bottom prices! Our online tool starts at approximately US$0.031/second—cutting costs by 60-80%!<br>
+      <small style="color: #666;">For RunningHub discounts and free trials, contact <a href="mailto:zhenyuedong@haima.me">zhenyuedong@haima.me</a>.</small>
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
       <img src="static/wechat.png" alt="Sponsor Contact" width="150">
     </td>
     <td width="75%" align="left" valign="middle">
