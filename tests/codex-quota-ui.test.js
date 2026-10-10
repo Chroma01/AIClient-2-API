@@ -15,19 +15,19 @@ describe('Codex quota badge loader', () => {
         ] } }) };
         const b = badge();
         const load = createCodexQuotaBadgeLoader({ apiClient, translate: key => key, now: () => 0 });
-        load(container(b));
-        await Promise.resolve(); await Promise.resolve();
+        await load(container(b));
+        await Promise.resolve();
         expect(apiClient.get).toHaveBeenCalledTimes(1);
         expect(b.textContent).toContain('32%');
-        load(container(b));
+        await load(container(b));
         expect(apiClient.get).toHaveBeenCalledTimes(1);
     });
 
     test('renders unavailable when the request fails', async () => {
         const b = badge();
         const load = createCodexQuotaBadgeLoader({ apiClient: { get: jest.fn().mockRejectedValue(new Error('offline')) }, translate: key => key });
-        load(container(b));
-        await Promise.resolve(); await Promise.resolve();
+        await load(container(b));
+        await Promise.resolve();
         expect(b.textContent).toBe('providers.codexQuota.unavailable');
     });
 });
