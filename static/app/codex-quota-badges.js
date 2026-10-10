@@ -22,21 +22,27 @@ export function createCodexQuotaBadgeLoader({ apiClient, translate, now = () => 
         badge.title = `${t('providers.codexQuota.details')}: ${plan}\n${details}`;
     };
     return function loadCodexQuotaBadges(container) {
-        if (!container) return;
-        container.querySelectorAll('.codex-quota-badge[data-provider-uuid]').forEach(badge => {
+        if (!container) return Promise.resolve();
+        const badges = container.querySelectorAll('.codex-quota-badge[data-provider-uuid]');
+        const promises = Array.from(badges).map(badge => {
             const uuid = badge.dataset.providerUuid;
             const cached = cache.get(uuid);
-            if (cached && now() - cached.cachedAt < CODEX_QUOTA_CACHE_TTL_MS) return render(badge, cached.result);
+            if (cached && now() - cached.cachedAt < CODEX_QUOTA_CACHE_TTL_MS) {
+                render(badge, cached.result);
+                return Promise.resolve();
+            }
             badge.textContent = t('providers.codexQuota.loading');
             let request = requests.get(uuid);
             if (!request) {
                 request = apiClient.get(`/providers/openai-codex-oauth/${encodeURIComponent(uuid)}/quota`)
-                    .then(response => ({ response })).catch(() => ({ error: true }))
+                    .then(response => ({ response }))
+                    .catch(() => ({ error: true }))
                     .then(result => { cache.set(uuid, { cachedAt: now(), result }); return result; })
                     .finally(() => requests.delete(uuid));
                 requests.set(uuid, request);
             }
-            request.then(result => render(badge, result));
+            return request.then(result => render(badge, result));
         });
+        return Promise.all(promises);
     };
 }
