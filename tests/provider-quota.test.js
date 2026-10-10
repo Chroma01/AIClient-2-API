@@ -16,7 +16,7 @@ describe('Codex provider quota normalization', () => {
             available: true,
             planType: 'Plus',
             windows: [
-                { key: '5h', usedPercentage: 32, durationMinutes: 300, resetsAt: 123000 },
+                { key: 'fiveHour', usedPercentage: 32, durationMinutes: 300, resetsAt: 123000 },
                 { key: 'weekly', usedPercentage: 57, durationMinutes: 10080, resetsAt: 456000 }
             ]
         });

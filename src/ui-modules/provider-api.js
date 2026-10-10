@@ -313,7 +313,7 @@ export function normalizeCodexQuota(usage = {}) {
     const rateLimit = usage.rate_limit || usage.rateLimit || {};
     const sourceWindows = [rateLimit.primary_window || rateLimit.primaryWindow, rateLimit.secondary_window || rateLimit.secondaryWindow]
         .filter(Boolean);
-    const durationKey = minutes => minutes === 300 ? '5h' : minutes === 10080 ? 'weekly' : minutes === 43200 ? 'monthly' : 'other';
+    const durationKey = minutes => minutes === 300 ? 'fiveHour' : minutes === 10080 ? 'weekly' : minutes === 43200 ? 'monthly' : 'other';
     const windows = sourceWindows.flatMap(window => {
         const rawUsedPercentage = window.used_percent ?? window.usedPercent;
         if (rawUsedPercentage === null || rawUsedPercentage === undefined ||
