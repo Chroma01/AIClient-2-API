@@ -1,3 +1,10 @@
+jest.mock('../src/providers/adapter.js', () => ({
+    getServiceAdapter: jest.fn(),
+    getRegisteredProviders: jest.fn(() => []),
+    invalidateServiceAdapter: jest.fn(),
+    serviceInstances: {}
+}));
+
 import { normalizeCodexQuota } from '../src/ui-modules/provider-api.js';
 
 describe('Codex provider quota normalization', () => {
