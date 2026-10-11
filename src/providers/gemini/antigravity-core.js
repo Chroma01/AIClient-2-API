@@ -20,6 +20,7 @@ import { cleanJsonSchemaProperties } from '../../converters/utils.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
 import { MODEL_PROVIDER } from '../../utils/common.js';
 import { normalizeAntigravityToolConfig } from './antigravity-tool-config.js';
+import { getQuotaRecoveryTime, isQuotaExhaustedError } from './quota-recovery.js';
 
 // --- Constants ---
 const CREDENTIALS_DIR = '.antigravity';
@@ -292,6 +293,9 @@ function applyAntigravityThinkingLevelConfig(thinkingConfig, level) {
     thinkingConfig.includeThoughts = true;
     delete thinkingConfig.thinkingBudget;
     delete thinkingConfig.thinking_budget;
+    // 兜底清掉蛇形 include_thoughts：与驼峰 includeThoughts 同指一个 proto oneof，
+    // 两者并存会被 Google 拒绝（_include_thoughts is already set. Cannot set 'includeThoughts'）。
+    delete thinkingConfig.include_thoughts;
     return thinkingConfig;
 }
 
@@ -1507,6 +1511,18 @@ export class AntigravityApiService {
             }
 
             if (status === 429) {
+                // 额度耗尽必须先于普通 Retry-After。getRetryAfterMs 也会解析错误体里的
+                // quotaResetDelay，放在前面会把带恢复时间的 RESOURCE_EXHAUSTED 提前截走。
+                if (isQuotaExhaustedError(error)) {
+                    await normalizeProviderErrorMessage(error, { status: 429, context: 'callApi' });
+                    const recoveryTime = getQuotaRecoveryTime(error);
+                    if (recoveryTime) error.quotaRecoveryTime = recoveryTime;
+                    error.quotaExhausted = true;
+                    logger.warn(`[Antigravity API] Quota exhausted (429 RESOURCE_EXHAUSTED). Not retrying the same credential; throwing to upper layer.${recoveryTime ? ` Recovery at ${recoveryTime.toISOString()}.` : ''}`);
+                    error.shouldSwitchCredential = true;
+                    error.skipErrorCount = true;
+                    throw error;
+                }
                 const retryAfter = getRetryAfterMs(error);
                 if (retryAfter !== null) {
                     await normalizeProviderErrorMessage(error, { status: 429, context: 'callApi' });
@@ -1670,6 +1686,18 @@ export class AntigravityApiService {
             }
 
             if (status === 429) {
+                // 额度耗尽必须先于普通 Retry-After。getRetryAfterMs 也会解析错误体里的
+                // quotaResetDelay，放在前面会把带恢复时间的 RESOURCE_EXHAUSTED 提前截走。
+                if (isQuotaExhaustedError(error)) {
+                    await normalizeProviderErrorMessage(error, { status: 429, context: 'stream' });
+                    const recoveryTime = getQuotaRecoveryTime(error);
+                    if (recoveryTime) error.quotaRecoveryTime = recoveryTime;
+                    error.quotaExhausted = true;
+                    logger.warn(`[Antigravity API] Quota exhausted (429 RESOURCE_EXHAUSTED) during stream. Not retrying the same credential; throwing to upper layer.${recoveryTime ? ` Recovery at ${recoveryTime.toISOString()}.` : ''}`);
+                    error.shouldSwitchCredential = true;
+                    error.skipErrorCount = true;
+                    throw error;
+                }
                 const retryAfter = getRetryAfterMs(error);
                 if (retryAfter !== null) {
                     await normalizeProviderErrorMessage(error, { status: 429, context: 'stream' });
