@@ -40,7 +40,9 @@ describe('Codex quota summary and badges', () => {
         quota: { available: true, planType, windows }
     });
 
-    test('normalizes real Unix-second reset values and renders them as dates', async () => {
+    test('normalizes Unix-second resets and renders quota details using real i18n', async () => {
+        global.localStorage = { getItem: () => 'en-US', setItem: jest.fn() };
+        const { t } = await import('../static/app/i18n.js');
         const quota = normalizeCodexQuota({
             plan_type: 'plus',
             rate_limit: {
@@ -50,12 +52,15 @@ describe('Codex quota summary and badges', () => {
         });
         const apiClient = { get: jest.fn().mockResolvedValue({ quota }) };
         const badge = createBadge('account-1');
-        const loadBadge = createCodexQuotaBadgeLoader({ apiClient, translate });
+        const loadBadge = createCodexQuotaBadgeLoader({ apiClient, translate: t });
 
         await loadBadge(createContainer([badge]));
 
         expect(quota.windows.map(window => window.key)).toEqual(['fiveHour', 'weekly']);
         expect(quota.windows.map(window => window.resetsAt)).toEqual([1800003600000, 1800604800000]);
+        expect(badge.textContent).toBe('5h 32% used · weekly 57% used');
+        expect(badge.title).toContain('plus plan');
+        expect(badge.title).toContain('32%');
         expect(badge.title).toContain(new Date(1800003600000).toLocaleString());
         expect(badge.title).toContain(new Date(1800604800000).toLocaleString());
         expect(badge.title).not.toContain(new Date(1800003600).toLocaleString());
