@@ -302,18 +302,34 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     return true;
 }
 
+function normalizeCodexResetAt(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp)) return null;
+    return timestamp < 1e12 ? timestamp * 1000 : timestamp;
+}
+
 export function normalizeCodexQuota(usage = {}) {
     const rateLimit = usage.rate_limit || usage.rateLimit || {};
     const sourceWindows = [rateLimit.primary_window || rateLimit.primaryWindow, rateLimit.secondary_window || rateLimit.secondaryWindow]
         .filter(Boolean);
     const durationKey = minutes => minutes === 300 ? '5h' : minutes === 10080 ? 'weekly' : minutes === 43200 ? 'monthly' : 'other';
-    const windows = sourceWindows.map(window => {
+    const windows = sourceWindows.flatMap(window => {
+        const rawUsedPercentage = window.used_percent ?? window.usedPercent;
+        if (rawUsedPercentage === null || rawUsedPercentage === undefined ||
+            (typeof rawUsedPercentage !== 'number' && typeof rawUsedPercentage !== 'string') ||
+            (typeof rawUsedPercentage === 'string' && rawUsedPercentage.trim() === '')) {
+            return [];
+        }
+        const usedPercentage = Number(rawUsedPercentage);
+        if (!Number.isFinite(usedPercentage)) return [];
+
         const durationMinutes = Number(window.duration_minutes ?? window.durationMinutes ?? ((window.limit_window_seconds ?? window.limitWindowSeconds ?? 0) / 60)) || 0;
         return {
             key: durationKey(durationMinutes),
-            usedPercentage: Number(window.used_percent ?? window.usedPercent ?? 0) || 0,
+            usedPercentage,
             durationMinutes,
-            resetsAt: window.reset_at ?? window.resetAt ?? null
+            resetsAt: normalizeCodexResetAt(window.reset_at ?? window.resetAt)
         };
     });
     return {
