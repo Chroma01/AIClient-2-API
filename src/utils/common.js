@@ -1131,7 +1131,15 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             }
 
             const blockType = CLAUDE_DELTA_BLOCK[deltaType] || 'text';
-            if (!claudeStreamState.current || claudeStreamState.current.type !== blockType) {
+            const addressed = Number.isInteger(chunk.index) ? claudeStreamState.open.get(chunk.index) : null;
+            const target = !claudeStreamState.indexesUnreliable
+                && addressed?.ownsSourceIndex
+                && addressed.type === blockType
+                ? addressed
+                : null;
+            if (target) {
+                claudeStreamState.current = target;
+            } else if (!claudeStreamState.current || claudeStreamState.current.type !== blockType) {
                 closeCurrent();
                 startSyntheticBlock(blockType);
             }

@@ -196,6 +196,39 @@ describe('Gemini → Claude stream protocol (#718)', () => {
         expect(stops(out)).toHaveLength(2);
     });
 
+    test('Responses text interleaved with tool arguments stays on its own block', async () => {
+        const native = [
+            { type: 'response.created', response: { id: 'resp-1', model: 'gpt' } },
+            { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'item-a', call_id: 'call-a', name: 'get_city' } },
+            { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id: 'msg-a', content: [{ type: 'output_text' }] } },
+            { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'item-a', delta: '{"city":"' },
+            { type: 'response.output_text.delta', output_index: 1, item_id: 'msg-a', content_index: 0, delta: 'Checking Paris' },
+            { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'item-a', delta: 'Paris"}' },
+            { type: 'response.output_text.done', output_index: 1, item_id: 'msg-a', content_index: 0 },
+            { type: 'response.function_call_arguments.done', output_index: 0, item_id: 'item-a' },
+            { type: 'response.completed', response: { output: [], usage: { input_tokens: 1, output_tokens: 1 } } }
+        ];
+        const { out } = await run({
+            nativeChunks: native,
+            fromProvider: 'claude',
+            toProvider: 'grok-cli-oauth'
+        });
+        const tool = starts(out).find(x => x.data.content_block.type === 'tool_use');
+        const text = starts(out).find(x => x.data.content_block.type === 'text');
+        const toolArgs = deltas(out)
+            .filter(x => x.data.index === tool.data.index && x.data.delta?.type === 'input_json_delta')
+            .map(x => x.data.delta.partial_json)
+            .join('');
+        const textContent = deltas(out)
+            .filter(x => x.data.index === text.data.index && x.data.delta?.type === 'text_delta')
+            .map(x => x.data.delta.text)
+            .join('');
+        expect(JSON.parse(toolArgs)).toEqual({ city: 'Paris' });
+        expect(textContent).toBe('Checking Paris');
+        expect(starts(out)).toHaveLength(2);
+        expect(stops(out)).toHaveLength(2);
+    });
+
     test('synthetic text block closes when the message ends even without a tool call', async () => {
         const { out } = await run({ nativeChunks: [
             geminiChunk({ text: 'Hello' }),
