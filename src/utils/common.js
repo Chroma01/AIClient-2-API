@@ -1326,7 +1326,9 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
-                    excludeUuids: cooldown.quotaExhausted && pooluuid ? [pooluuid] : []
+                    excludeUuids: cooldown.quotaExhausted
+                        ? [...new Set([...(retryContext?.exhaustedUuids || []), pooluuid].filter(Boolean))]
+                        : []
                 });
                 
                 if (result && result.service) {
@@ -1335,6 +1337,9 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                     // 使用新服务重试
                     const newRetryContext = {
                         ...retryContext,
+                        exhaustedUuids: cooldown.quotaExhausted
+                            ? [...new Set([...(retryContext?.exhaustedUuids || []), pooluuid].filter(Boolean))]
+                            : retryContext?.exhaustedUuids,
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries,
@@ -1591,7 +1596,9 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
                 const result = await getApiServiceWithFallback(CONFIG, model, {
                     acquireSlot: true,
-                    excludeUuids: cooldown.quotaExhausted && pooluuid ? [pooluuid] : []
+                    excludeUuids: cooldown.quotaExhausted
+                        ? [...new Set([...(retryContext?.exhaustedUuids || []), pooluuid].filter(Boolean))]
+                        : []
                 });
                 
                 if (result && result.service) {
@@ -1600,6 +1607,9 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                     // 使用新服务重试
                     const newRetryContext = {
                         ...retryContext,
+                        exhaustedUuids: cooldown.quotaExhausted
+                            ? [...new Set([...(retryContext?.exhaustedUuids || []), pooluuid].filter(Boolean))]
+                            : retryContext?.exhaustedUuids,
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries

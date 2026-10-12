@@ -99,6 +99,24 @@ describe('Google quota metadata parsing', () => {
         expect(recovery.getTime() - now).toBe((3 * 3600 + 48 * 60 + 29) * 1000);
     });
 
+    test('an absolute reset time wins even when a short delay is listed first', () => {
+        const bodyFor = details => [{ error: { status: 'RESOURCE_EXHAUSTED', details } }];
+        const first = getQuotaRecoveryTime(quotaError({
+            body: bodyFor([
+                { retryDelay: '60s' },
+                { metadata: { quotaResetTimeStamp: '2027-01-01T00:00:00Z' } }
+            ])
+        }), now);
+        const reversed = getQuotaRecoveryTime(quotaError({
+            body: bodyFor([
+                { metadata: { quotaResetTimeStamp: '2027-01-01T00:00:00Z' } },
+                { retryDelay: '60s' }
+            ])
+        }), now);
+        expect(first.toISOString()).toBe('2027-01-01T00:00:00.000Z');
+        expect(reversed.toISOString()).toBe(first.toISOString());
+    });
+
     test('plain 429 and Retry-After are not quota exhaustion', () => {
         const plain = new Error('limited');
         plain.response = { status: 429, headers: { 'retry-after': '2' }, data: { error: { message: 'slow down' } } };
