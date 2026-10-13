@@ -1080,9 +1080,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             if (suppliedIndex !== null && claudeStreamState.open.has(suppliedIndex)) {
                 claudeStreamState.indexesUnreliable = true;
             }
-            // 工具块之后可能还有交错的参数（Responses 并行调用），所以当前是工具块时
-            // 不能关；当前是合成的文本/思考块时必须先关，否则它会被覆盖且永无收尾。
-            if (claudeStreamState.current && !isClaudeToolBlock(claudeStreamState.current.type)) closeCurrent();
+            // 只有没有可靠源索引的合成块，才在类型切换时提前关闭。
+            // 带源索引的文本/思考块必须留到它自己的 content_block_stop，
+            // 否则先开文本再开工具时，文本块被删掉，后续工具参数会因为找不到原块而被截断。
+            if (claudeStreamState.current && !claudeStreamState.current.ownsSourceIndex) closeCurrent();
 
             const index = claudeStreamState.nextIndex++;
             const block = chunk.content_block ? { ...chunk.content_block } : { type: blockType, text: '' };
