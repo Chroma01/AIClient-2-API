@@ -28,7 +28,7 @@ function response() {
 }
 
 function poolWith(accounts, currentUuid) {
-    return {
+    const manager = {
         markProviderHealthy: jest.fn(),
         markProviderUnhealthy: jest.fn(),
         markProviderUnhealthyWithRecoveryTime: jest.fn(),
@@ -41,6 +41,27 @@ function poolWith(accounts, currentUuid) {
         },
         currentUuid
     };
+    manager.selectProviderWithFallback = async (providerType, requestedModel, options = {}) => {
+        const excluded = new Set(options.excludeUuids || []);
+        const chain = [providerType, ...(manager.fallbackChain?.[providerType] || [])];
+        for (const type of chain) {
+            const selected = (manager.providerStatus[type] || []).find(provider => {
+                const config = provider.config;
+                return config?.uuid && !excluded.has(config.uuid) && config.isHealthy !== false && config.isDisabled !== true;
+            });
+            if (selected) return { config: selected.config, actualProviderType: type, isFallback: type !== providerType };
+        }
+        const mapping = manager.modelFallbackMapping?.[requestedModel];
+        if (!mapping) return null;
+        const mapped = (manager.providerStatus[mapping.targetProviderType] || []).find(provider => {
+            const config = provider.config;
+            return config?.uuid && !excluded.has(config.uuid) && config.isHealthy !== false && config.isDisabled !== true;
+        });
+        return mapped
+            ? { config: mapped.config, actualProviderType: mapping.targetProviderType, actualModel: mapping.targetModel, isFallback: true }
+            : null;
+    };
+    return manager;
 }
 
 function quotaError({ body, asString = false, recovery, exhausted = true } = {}) {
@@ -225,6 +246,57 @@ describe('quota exhaustion does not spin on the same account', () => {
         expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(1);
         expect(mockGetApiServiceWithFallback.mock.calls[0][2].excludeUuids).toEqual(['only']);
         expect(backup.generateContentStream).toHaveBeenCalledTimes(1);
+    });
+
+
+    test('a model mapping can take over when the current pool is exhausted', async () => {
+        const manager = poolWith([{ uuid: 'only' }], 'only');
+        manager.modelFallbackMapping = {
+            'gemini-3.8-flash-high': { targetProviderType: 'gemini-cli-oauth', targetModel: 'gemini-3.8-flash' }
+        };
+        manager.providerStatus['gemini-cli-oauth'] = [{
+            uuid: 'backup',
+            config: { uuid: 'backup', isHealthy: true }
+        }];
+        const backup = failingService(Object.assign(new Error('mapped backup answered'), { status: 400, response: { status: 400, data: {} } }));
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: backup,
+            uuid: 'backup',
+            actualProviderType: 'gemini-cli-oauth',
+            actualModel: 'gemini-3.8-flash',
+            serviceConfig: {}
+        });
+        await runStream(quotaError({ body: exhaustedBody() }), manager);
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(1);
+        expect(mockGetApiServiceWithFallback.mock.calls[0][2].excludeUuids).toEqual(['only']);
+        expect(backup.generateContentStream).toHaveBeenCalledTimes(1);
+    });
+
+    test('a unary model mapping can take over when the current pool is exhausted', async () => {
+        const manager = poolWith([{ uuid: 'only' }], 'only');
+        manager.modelFallbackMapping = {
+            'gemini-3.8-flash-high': { targetProviderType: 'gemini-cli-oauth', targetModel: 'gemini-3.8-flash' }
+        };
+        manager.providerStatus['gemini-cli-oauth'] = [{
+            uuid: 'backup',
+            config: { uuid: 'backup', isHealthy: true }
+        }];
+        const backup = failingService(Object.assign(new Error('mapped backup answered'), { status: 400, response: { status: 400, data: {} } }));
+        mockGetApiServiceWithFallback.mockResolvedValueOnce({
+            service: backup,
+            uuid: 'backup',
+            actualProviderType: 'gemini-cli-oauth',
+            actualModel: 'gemini-3.8-flash',
+            serviceConfig: {}
+        });
+        const res = response();
+        await handleUnaryRequest(
+            res, failingService(quotaError({ body: exhaustedBody() })),
+            'gemini-3.8-flash-high', {}, 'openai', 'gemini-antigravity',
+            'none', null, manager, 'only', null, { CONFIG: {}, maxRetries: 5 }
+        );
+        expect(mockGetApiServiceWithFallback).toHaveBeenCalledTimes(1);
+        expect(backup.generateContent).toHaveBeenCalledTimes(1);
     });
 
     test('unary requests with one account also return immediately', async () => {
