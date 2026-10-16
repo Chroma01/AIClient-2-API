@@ -13,6 +13,7 @@ import { AntigravityApiService, isAntigravityModelRetired } from '../src/provide
 import { PROVIDER_MODELS } from '../src/providers/provider-models.js';
 import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
 import { getServiceAdapter } from '../src/providers/adapter.js';
+import { handleGetProviderModels, handleGetProviderTypeModels } from '../src/ui-modules/provider-api.js';
 import { ENDPOINT_TYPE, MODEL_PROVIDER, handleModelListRequest, handleStreamRequest, handleUnaryRequest } from '../src/utils/common.js';
 
 describe('Antigravity model availability', () => {
@@ -236,6 +237,43 @@ describe('Antigravity model availability', () => {
         } finally {
             jest.useRealTimers();
         }
+    });
+
+    test('uses tier-filtered Antigravity models in playground model APIs', async () => {
+        const models = [
+            'gemini-3.8-flash-high',
+            'gemini-3.8-flash-low',
+            'gemini-3.8-flash-medium'
+        ];
+        const providerPoolManager = {
+            providerPools: { [MODEL_PROVIDER.ANTIGRAVITY]: [{ uuid: 'free-account' }] },
+            providerStatus: { [MODEL_PROVIDER.ANTIGRAVITY]: [{ uuid: 'free-account' }] },
+            getAllAvailableModels: jest.fn(async () => models.map(model => ({
+                provider: MODEL_PROVIDER.ANTIGRAVITY,
+                model
+            })))
+        };
+        const createResponse = () => ({
+            writeHead: jest.fn(),
+            end: jest.fn(function (body) {
+                this.body = body;
+            })
+        });
+
+        const allModelsResponse = createResponse();
+        await handleGetProviderModels({}, allModelsResponse, {}, providerPoolManager);
+        expect(JSON.parse(allModelsResponse.body)[MODEL_PROVIDER.ANTIGRAVITY]).toEqual(models);
+
+        const typeModelsResponse = createResponse();
+        await handleGetProviderTypeModels(
+            {},
+            typeModelsResponse,
+            {},
+            providerPoolManager,
+            MODEL_PROVIDER.ANTIGRAVITY
+        );
+        expect(JSON.parse(typeModelsResponse.body).models).toEqual(models);
+        expect(providerPoolManager.getAllAvailableModels).toHaveBeenCalledTimes(2);
     });
 
     test('routes only Gemini 3.8 Flash variants to free-tier accounts', async () => {
