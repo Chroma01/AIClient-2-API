@@ -562,6 +562,7 @@ export function getProtocolPrefix(provider) {
     // Special cases for OpenAI-compatible dedicated providers.
     if (provider === 'atlascloud' || provider.startsWith('atlascloud-') ||
         provider === 'qiniu' || provider.startsWith('qiniu-') ||
+        provider === 'apimart' || provider.startsWith('apimart-') ||
         provider === 'fenno' || provider.startsWith('fenno-') ||
         provider === 'github-copilot' || provider.startsWith('github-copilot-')) {
         return MODEL_PROTOCOL_PREFIX.OPENAI;

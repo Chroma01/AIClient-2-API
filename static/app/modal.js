@@ -5,7 +5,7 @@ import { handleProviderPasswordToggle } from './event-handlers.js';
 import { t } from './i18n.js';
 import { createCodexQuotaBadgeLoader } from './codex-quota-badges.js';
 
-const MANAGED_MODEL_LIST_PROVIDERS = new Set(['openai-custom', 'openaiResponses-custom', 'claude-custom', 'atlascloud', 'qiniu', 'fenno']);
+const MANAGED_MODEL_LIST_PROVIDERS = new Set(['openai-custom', 'openaiResponses-custom', 'claude-custom', 'atlascloud', 'qiniu', 'apimart', 'fenno']);
 const COPILOT_QUOTA_CACHE_TTL_MS = 60_000;
 const copilotQuotaCache = new Map();
 const copilotQuotaRequests = new Map();
