@@ -31,18 +31,9 @@ export class ProviderStrategy {
      * be exposed as successful completions. The common request layer owns retry orchestration.
      *
      * @param {object} _response - Protocol-native response or stream chunk.
-     * @returns {{code: string, message?: string, status?: number, retryable?: boolean, retryCategory?: string, skipErrorCount?: boolean, shouldSwitchCredential?: boolean}|null}
+     * @returns {{code: string, message?: string, retryable?: boolean, retryCategory?: string, skipErrorCount?: boolean, shouldSwitchCredential?: boolean}|null}
      */
     classifyResponseFailure(_response) {
-        return null;
-    }
-
-    /**
-     * Whether a native stream chunk supplies a completion reason.
-     * Return null for protocols whose EOF contract is not validated here.
-     * @returns {boolean|null}
-     */
-    isStreamComplete(_response) {
         return null;
     }
 
