@@ -45,6 +45,55 @@ describe('Antigravity model availability', () => {
         expect(isAntigravityModelRetired('gemini-claude-sonnet-4-6', cutoff, undefined)).toBe(false);
     });
 
+    test.each([
+        'gemini-3.8-flash',
+        'models/gemini-3.8-flash',
+        ' models/gemini-3.8-flash (thinking) ',
+        'gemini-3.8-flash-medium'
+    ])('accepts the allowed upstream model behind request alias %s', model => {
+        expect(isAntigravityModelRetired(model, cutoff, 'free-tier')).toBe(false);
+        const service = Object.create(AntigravityApiService.prototype);
+        service.tierId = 'free-tier';
+        service.availableModels = ['gemini-3.8-flash-low'];
+        service.config = { MODEL_FALLBACK_ENABLED: false };
+        const result = service.buildAntigravityPayload(model, {
+            contents: [{ role: 'user', parts: [{ text: 'hello' }] }]
+        });
+        expect(result.actualModelName).toBe('gemini-3.8-flash-low');
+        expect(result.payload.model).toBe('gemini-3.8-flash-low');
+        if (model === 'gemini-3.8-flash-medium') {
+            expect(result.payload.request.generationConfig.thinkingConfig.thinkingLevel).toBe('medium');
+        }
+    });
+
+    test.each(['unary', 'streaming'])('sends a legacy alias to the upstream for %s requests', async mode => {
+        const service = Object.create(AntigravityApiService.prototype);
+        service.isInitialized = true;
+        service.tierId = 'free-tier';
+        service.availableModels = ['gemini-3.8-flash-low'];
+        service.config = {};
+        service.authClient = { credentials: { expiry_date: Date.now() + 3600000 } };
+        service.prepareRequestMetadata = jest.fn();
+        const upstreamResponse = { response: { candidates: [{ content: { parts: [{ text: 'ok' }] } }] } };
+        service.callApi = jest.fn().mockResolvedValue(upstreamResponse);
+        service.streamApi = jest.fn(async function* () { yield upstreamResponse; });
+        const body = { contents: [{ role: 'user', parts: [{ text: 'hello' }] }] };
+
+        if (mode === 'unary') {
+            await expect(service.generateContent('gemini-3.8-flash', body)).resolves.toEqual(upstreamResponse.response);
+            expect(service.callApi).toHaveBeenCalledWith('generateContent', expect.objectContaining({
+                model: 'gemini-3.8-flash-low'
+            }));
+        } else {
+            const chunks = [];
+            for await (const chunk of service.generateContentStream('gemini-3.8-flash', body)) chunks.push(chunk);
+            expect(chunks).toEqual([upstreamResponse.response]);
+            expect(service.streamApi).toHaveBeenCalledWith('streamGenerateContent', expect.objectContaining({
+                model: 'gemini-3.8-flash-low'
+            }));
+        }
+    });
+
     test('filters model lists and direct requests according to account tier', async () => {
         jest.useFakeTimers().setSystemTime(cutoff);
 
@@ -59,7 +108,8 @@ describe('Antigravity model availability', () => {
                     'gemini-3.8-flash-low',
                     'gemini-3.7-flash-high',
                     'gemini-claude-sonnet-4-6',
-                    'gpt-oss-120b-medium'
+                    'gpt-oss-120b-medium',
+                    'gemini-3.8-flash'
                 ];
                 return service;
             };
@@ -87,7 +137,8 @@ describe('Antigravity model availability', () => {
                     'models/gemini-3.8-flash-low',
                     'models/gemini-3.7-flash-high',
                     'models/gemini-claude-sonnet-4-6',
-                    'models/gpt-oss-120b-medium'
+                    'models/gpt-oss-120b-medium',
+                    'models/gemini-3.8-flash'
                 ]);
             }
         } finally {
@@ -182,9 +233,9 @@ describe('Antigravity model availability', () => {
                 serviceAdapter.listModels = jest.fn(async () => {
                     serviceAdapter.antigravityApiService.tierId = tierId;
                     const models = tierId === 'free-tier'
-                        ? ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low']
+                        ? ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'gemini-3.8-flash']
                         : tierId
-                            ? ['gemini-3.8-flash-medium', 'gemini-claude-sonnet-4-6']
+                            ? ['gemini-3.8-flash-medium', 'gemini-claude-sonnet-4-6', 'gemini-4-argon', 'gemini-4-argon-high']
                             : [];
                     return { models: models.map(model => ({ name: `models/${model}` })) };
                 });
@@ -222,6 +273,7 @@ describe('Antigravity model availability', () => {
                 expect(freeOnlyModels).toContain('gemini-antigravity:gemini-3.8-flash-high');
                 expect(freeOnlyModels).toContain('gemini-antigravity:gemini-3.8-flash-medium');
                 expect(freeOnlyModels).toContain('gemini-antigravity:gemini-3.8-flash-low');
+                expect(freeOnlyModels).not.toContain('gemini-antigravity:gemini-3.8-flash');
                 expect(freeOnlyModels).not.toContain('gemini-antigravity:gemini-3.7-flash-high');
                 expect(freeOnlyModels).not.toContain('gemini-antigravity:gemini-claude-sonnet-4-6');
                 expect(freeOnlyModels).not.toContain('gemini-antigravity:gpt-oss-120b-medium');
@@ -229,6 +281,10 @@ describe('Antigravity model availability', () => {
                 const mixedTierModels = await listAutoModels(['free-tier', 'Google AI Pro(free)'], endpointType);
                 expect(mixedTierModels).toContain('gemini-antigravity:gemini-claude-sonnet-4-6');
                 expect(mixedTierModels).not.toContain('gemini-antigravity:gpt-oss-120b-medium');
+                for (const model of ['gemini-4-argon', 'gemini-4-argon-high']) {
+                    expect(freeOnlyModels).not.toContain(`gemini-antigravity:${model}`);
+                    expect(mixedTierModels).toContain(`gemini-antigravity:${model}`);
+                }
 
                 const unknownTierModels = await listAutoModels(['free-tier', undefined], endpointType);
                 expect(unknownTierModels).toContain('gemini-antigravity:gemini-claude-sonnet-4-6');
@@ -290,6 +346,8 @@ describe('Antigravity model availability', () => {
                 };
                 const serviceAdapter = getServiceAdapter(config);
                 serviceAdapter.antigravityApiService.tierId = tierId;
+                // Tier is already known: do not run credential discovery or real HTTP under fake timers.
+                serviceAdapter.antigravityApiService.isInitialized = true;
                 return {
                     config,
                     uuid,
@@ -328,7 +386,13 @@ describe('Antigravity model availability', () => {
                 MODEL_PROVIDER.ANTIGRAVITY,
                 'gemini-claude-sonnet-4-6'
             )).resolves.toBe(atCutoff.paidNode.config);
-            for (const model of ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low']) {
+            for (const model of ['gemini-4-argon', 'gemini-4-argon-high']) {
+                await expect(atCutoff.poolManager.selectProvider(
+                    MODEL_PROVIDER.ANTIGRAVITY,
+                    model
+                )).resolves.toBe(atCutoff.paidNode.config);
+            }
+            for (const model of ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'gemini-3.8-flash']) {
                 const eligiblePool = createPool();
                 await expect(eligiblePool.poolManager.selectProvider(
                     MODEL_PROVIDER.ANTIGRAVITY,

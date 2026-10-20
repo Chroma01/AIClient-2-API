@@ -7,6 +7,8 @@ jest.mock('../src/providers/adapter.js', () => ({
 
 import { normalizeCodexQuota } from '../src/ui-modules/provider-api.js';
 import {
+    CODEX_QUOTA_CACHE_TTL_MS,
+    createCodexQuotaClient,
     createCodexQuotaBadgeLoader,
     createCodexQuotaUsageLoader
 } from '../static/app/codex-quota-badges.js';
@@ -40,9 +42,21 @@ describe('Codex quota summary and badges', () => {
         quota: { available: true, planType, windows }
     });
 
-    test('normalizes Unix-second resets and renders quota details using real i18n', async () => {
-        global.localStorage = { getItem: () => 'en-US', setItem: jest.fn() };
-        const { t } = await import('../static/app/i18n.js');
+    test.each([
+        ['en-US', '5h 32% used · weekly 57% used', 'plus plan'],
+        ['zh-CN', '5h 已使用 32% · 每周 已使用 57%', 'plus 计划']
+    ])('normalizes Unix-second resets and renders quota details using real %s i18n', async (language, text, plan) => {
+        const originalStorage = global.localStorage;
+        let t;
+        try {
+            global.localStorage = { getItem: () => language, setItem: jest.fn() };
+            await jest.isolateModulesAsync(async () => {
+                ({ t } = await import('../static/app/i18n.js'));
+            });
+        } finally {
+            if (originalStorage === undefined) delete global.localStorage;
+            else global.localStorage = originalStorage;
+        }
         const quota = normalizeCodexQuota({
             plan_type: 'plus',
             rate_limit: {
@@ -58,8 +72,8 @@ describe('Codex quota summary and badges', () => {
 
         expect(quota.windows.map(window => window.key)).toEqual(['5h', 'weekly']);
         expect(quota.windows.map(window => window.resetsAt)).toEqual([1800003600000, 1800604800000]);
-        expect(badge.textContent).toBe('5h 32% used · weekly 57% used');
-        expect(badge.title).toContain('plus plan');
+        expect(badge.textContent).toBe(text);
+        expect(badge.title).toContain(plan);
         expect(badge.title).toContain('32%');
         expect(badge.title).toContain(new Date(1800003600000).toLocaleString());
         expect(badge.title).toContain(new Date(1800604800000).toLocaleString());
@@ -111,7 +125,18 @@ describe('Codex quota summary and badges', () => {
         expect(badge.textContent).toContain('61%');
     });
 
-    test('bounds concurrent account requests', async () => {
+    test.each(['5h', 'fiveHour'])('renders the %s window with the canonical fiveHour translation', async key => {
+        const apiClient = { get: jest.fn().mockResolvedValue(quotaResponse([
+            { key, usedPercentage: 32, resetsAt: null }
+        ])) };
+        const badge = createBadge('codex-a');
+        await createCodexQuotaBadgeLoader({ apiClient, translate })(createContainer([badge]));
+        expect(badge.textContent).toBe('5h 32% used');
+        expect(badge.title).toContain('5h: 32%');
+        expect(badge.title).not.toContain('providers.codexQuota.');
+    });
+
+    test('shares 20 requests across repeated concurrent summary and badge loads with at most four active', async () => {
         let activeRequests = 0;
         let maxActiveRequests = 0;
         const apiClient = {
@@ -123,12 +148,54 @@ describe('Codex quota summary and badges', () => {
                 return quotaResponse([{ key: 'weekly', usedPercentage: 10, resetsAt: null }]);
             })
         };
-        const providers = Array.from({ length: 12 }, (_, index) => ({ uuid: `codex-${index}`, isHealthy: true }));
+        const providers = Array.from({ length: 20 }, (_, index) => ({ uuid: `codex-${index}`, isHealthy: true }));
+        const badges = providers.flatMap(provider => [createBadge(provider.uuid), createBadge(provider.uuid)]);
+        const loadSummary = createCodexQuotaUsageLoader({ apiClient });
+        const loadBadges = createCodexQuotaBadgeLoader({ apiClient, translate });
+        const container = createContainer(badges);
 
-        await createCodexQuotaUsageLoader({ apiClient })(providers);
+        const results = await Promise.all([
+            loadSummary(providers),
+            loadBadges(container),
+            loadSummary(providers),
+            loadBadges(container)
+        ]);
 
-        expect(maxActiveRequests).toBeLessThanOrEqual(4);
-        expect(apiClient.get).toHaveBeenCalledTimes(providers.length);
+        expect(results[0]).toEqual({ available: true, usedPercent: 200, totalPercent: 2000 });
+        expect(results[2]).toEqual(results[0]);
+        expect(badges.every(badge => badge.textContent === 'weekly 10% used')).toBe(true);
+        expect(maxActiveRequests).toBe(4);
+        expect(activeRequests).toBe(0);
+        expect(apiClient.get).toHaveBeenCalledTimes(20);
+
+        await Promise.all([loadSummary(providers), loadBadges(container)]);
+        expect(apiClient.get).toHaveBeenCalledTimes(20);
+    });
+
+    test('deduplicates forced refreshes and expires cached failures at the TTL boundary', async () => {
+        let now = 0;
+        const apiClient = { get: jest.fn().mockRejectedValueOnce(new Error('offline')) };
+        const client = createCodexQuotaClient({ apiClient, now: () => now });
+        const uuid = 'codex/a b';
+        await expect(client.getQuota(uuid)).resolves.toEqual({ error: true });
+        now = CODEX_QUOTA_CACHE_TTL_MS - 1;
+        await expect(client.getQuota(uuid)).resolves.toEqual({ error: true });
+        expect(apiClient.get).toHaveBeenCalledTimes(1);
+
+        const response = quotaResponse([{ key: '5h', usedPercentage: 23 }]);
+        apiClient.get.mockResolvedValue(response);
+        now = CODEX_QUOTA_CACHE_TTL_MS;
+        await expect(client.getQuota(uuid)).resolves.toEqual({ response });
+        expect(apiClient.get).toHaveBeenCalledTimes(2);
+        expect(apiClient.get).toHaveBeenLastCalledWith('/providers/openai-codex-oauth/codex%2Fa%20b/quota');
+
+        await Promise.all([
+            client.getQuota(uuid, { forceRefresh: true }),
+            client.getQuota(uuid, { forceRefresh: true })
+        ]);
+        expect(apiClient.get).toHaveBeenCalledTimes(3);
+        await client.getQuota(uuid);
+        expect(apiClient.get).toHaveBeenCalledTimes(3);
     });
 
     test('sums each healthy enabled account highest window and excludes other accounts', async () => {

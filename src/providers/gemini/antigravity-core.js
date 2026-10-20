@@ -31,6 +31,8 @@ const ANTIGRAVITY_BASE_URL_DAILY = 'https://daily-cloudcode-pa.googleapis.com';
 const ANTIGRAVITY_BASE_URL_PROD = 'https://cloudcode-pa.googleapis.com';
 
 const ANTIGRAVITY_API_VERSION = 'v1internal';
+// Local free-tier compatibility policy and upstream references:
+// docs/ANTIGRAVITY_FREE_TIER_MODELS.md (not an exhaustive upstream entitlement list).
 const ANTIGRAVITY_FREE_TIER_MODELS = new Set([
     'gemini-3.8-flash-high',
     'gemini-3.8-flash-medium',
@@ -39,6 +41,8 @@ const ANTIGRAVITY_FREE_TIER_MODELS = new Set([
 const OAUTH_CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
 const OAUTH_CLIENT_SECRET = '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';
 const DEFAULT_USER_AGENT = 'antigravity/2.8.1 darwin/arm64';
+// Argon is available through the CLI/App, not the IDE client.
+const ANTIGRAVITY_CLI_USER_AGENT = 'antigravity/cli/1.4.2 darwin/arm64';
 const REFRESH_SKEW = 3000; // 3000秒（50分钟）提前刷新Token
 
 const ANTIGRAVITY_SYSTEM_PROMPT = `You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**`;
@@ -66,6 +70,7 @@ const ANTIGRAVITY_ERROR_BODY_MAX_BYTES = 1024 * 1024;
 const ANTIGRAVITY_MODELS = getProviderModels(MODEL_PROVIDER.ANTIGRAVITY);
 
 const ANTIGRAVITY_CLIENT_TO_UPSTREAM_MODEL = {
+    'gemini-4-argon': 'gemini-4-argon-medium',
     'gemini-3.1-pro-high': 'gemini-pro-agent',
     'gemini-3.1-pro-preview': 'gemini-pro-agent',
     'gemini-3.5-flash-high': 'gemini-3.5-flash-low',
@@ -78,6 +83,7 @@ const ANTIGRAVITY_CLIENT_TO_UPSTREAM_MODEL = {
 };
 
 const ANTIGRAVITY_UPSTREAM_TO_CLIENT_MODELS = {
+    'gemini-4-argon-medium': ['gemini-4-argon'],
     'gemini-pro-agent': ['gemini-3.1-pro-high', 'gemini-3.1-pro-preview'],
     'gemini-3.6-flash-low': ['gemini-3.6-flash', 'gemini-3.6-flash-low', 'gemini-3.6-flash-medium'],
     'gemini-3.7-flash-low': ['gemini-3.7-flash', 'gemini-3.7-flash-low', 'gemini-3.7-flash-medium'],
@@ -85,6 +91,8 @@ const ANTIGRAVITY_UPSTREAM_TO_CLIENT_MODELS = {
 };
 
 const ANTIGRAVITY_CLIENT_MODEL_THINKING_LEVEL = {
+    'gemini-4-argon': 'medium',
+    'gemini-4-argon-high': 'high',
     'gemini-pro-agent': 'high',
     'gemini-3.1-pro-high': 'high',
     'gemini-3.1-pro-preview': 'high',
@@ -106,6 +114,12 @@ const ANTIGRAVITY_CLIENT_MODEL_THINKING_LEVEL = {
 };
 
 const ANTIGRAVITY_MODEL_METADATA = {
+    'gemini-4-argon-medium': {
+        thinking: { levels: ['low', 'medium', 'high'] }
+    },
+    'gemini-4-argon-high': {
+        thinking: { levels: ['low', 'medium', 'high'] }
+    },
     'claude-opus-4-6-thinking': {
         maxOutputTokens: 64000,
         thinking: { min: 1024, max: 64000, zeroAllowed: true, dynamicAllowed: true }
@@ -214,9 +228,24 @@ function resolveAntigravityUpstreamModel(modelName) {
     return ANTIGRAVITY_CLIENT_TO_UPSTREAM_MODEL[baseModel] || baseModel;
 }
 
+function getAntigravityRequestUserAgent(modelName, userAgent) {
+    if (resolveAntigravityUpstreamModel(modelName).startsWith('gemini-4-argon')) {
+        return userAgent?.startsWith('antigravity/cli/') ? userAgent : ANTIGRAVITY_CLI_USER_AGENT;
+    }
+    return userAgent;
+}
+
+// Requests are authorized by their upstream target, not by the exposed alias.
+// Keep the client model intact when building payloads so Medium retains its thinking level.
 export function isAntigravityModelRetired(modelName, now = Date.now(), tierId) {
     if (tierId !== 'free-tier') return false;
-    return !ANTIGRAVITY_FREE_TIER_MODELS.has(stripModelSuffix(modelName));
+    return !ANTIGRAVITY_FREE_TIER_MODELS.has(resolveAntigravityUpstreamModel(modelName));
+}
+
+// Listings intentionally expose only the three thinking variants on free accounts.
+// Legacy aliases remain accepted by the request policy above without adding UI entries.
+export function isAntigravityModelListed(modelName, tierId) {
+    return tierId !== 'free-tier' || ANTIGRAVITY_FREE_TIER_MODELS.has(stripModelSuffix(modelName));
 }
 
 function expandAntigravityClientModels(upstreamModel) {
@@ -1382,7 +1411,7 @@ export class AntigravityApiService {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'User-Agent': this.userAgent
+                        'User-Agent': getAntigravityRequestUserAgent('gemini-4-argon', this.userAgent)
                     },
                     responseType: 'json',
                     body: JSON.stringify(this.projectId ? { project: this.projectId } : {})
@@ -1419,7 +1448,7 @@ export class AntigravityApiService {
         const currentTime = Date.now();
         const now = Math.floor(currentTime / 1000);
         const formattedModels = this.availableModels
-            .filter(modelId => !isAntigravityModelRetired(modelId, currentTime, this.tierId))
+            .filter(modelId => isAntigravityModelListed(modelId, this.tierId))
             .map(modelId => {
                 const displayName = modelId.split('-').map(word =>
                     word.charAt(0).toUpperCase() + word.slice(1)
@@ -1474,7 +1503,7 @@ export class AntigravityApiService {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'User-Agent': this.userAgent
+                    'User-Agent': getAntigravityRequestUserAgent(body?.model, this.userAgent)
                 },
                 responseType: 'json',
                 body: JSON.stringify(body)
@@ -1589,7 +1618,7 @@ export class AntigravityApiService {
                 headers: {
                     'Content-Type': 'application/json',
                     'Accept': 'text/event-stream',
-                    'User-Agent': this.userAgent
+                    'User-Agent': getAntigravityRequestUserAgent(body?.model, this.userAgent)
                 },
                 responseType: 'stream',
                 // 阻止 gaxios 在非 2xx 时自行消耗流并抛异常，

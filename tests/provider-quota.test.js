@@ -8,6 +8,20 @@ jest.mock('../src/providers/adapter.js', () => ({
 import { normalizeCodexQuota } from '../src/ui-modules/provider-api.js';
 
 describe('Codex provider quota normalization', () => {
+    test('normalizes camelCase windows without multiplying millisecond resets again', () => {
+        expect(normalizeCodexQuota({ planType: 'Pro', rateLimit: {
+            primaryWindow: { usedPercent: '12.5', durationMinutes: 300, resetAt: 1800003600000 },
+            secondaryWindow: { usedPercent: 70, durationMinutes: 43200, resetAt: '1800604800000' }
+        } })).toEqual({
+            available: true,
+            planType: 'Pro',
+            windows: [
+                { key: '5h', usedPercentage: 12.5, durationMinutes: 300, resetsAt: 1800003600000 },
+                { key: 'monthly', usedPercentage: 70, durationMinutes: 43200, resetsAt: 1800604800000 }
+            ]
+        });
+    });
+
     test('normalizes rate limit windows and durations', () => {
         expect(normalizeCodexQuota({ plan_type: 'Plus', rate_limit: {
             primary_window: { used_percent: 32, limit_window_seconds: 18000, reset_at: 123 },

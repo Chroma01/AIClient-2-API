@@ -1493,9 +1493,8 @@ export class ProviderPoolManager {
                     ]);
 
                 if (providerType === MODEL_PROVIDER.ANTIGRAVITY && this.providerStatus[providerType].length > 0) {
-                    const { isAntigravityModelRetired } = await import('./gemini/antigravity-core.js');
-                    const currentTime = Date.now();
-                    if (models.some(model => isAntigravityModelRetired(model, currentTime, 'free-tier'))) {
+                    const { isAntigravityModelListed } = await import('./gemini/antigravity-core.js');
+                    if (models.some(model => !isAntigravityModelListed(model, 'free-tier'))) {
                         const accountAvailability = [];
                         for (const providerStatus of this.providerStatus[providerType]) {
                             let tierId;
@@ -1528,10 +1527,10 @@ export class ProviderPoolManager {
                         }
 
                         models = models.filter(model => {
-                            if (!isAntigravityModelRetired(model, currentTime, 'free-tier')) return true;
+                            if (isAntigravityModelListed(model, 'free-tier')) return true;
                             return accountAvailability.some(({ tierId, modelIds }) => {
                                 if (!tierId) return true;
-                                if (isAntigravityModelRetired(model, currentTime, tierId)) return false;
+                                if (!isAntigravityModelListed(model, tierId)) return false;
                                 return !modelIds || modelIds.has(model);
                             });
                         });
