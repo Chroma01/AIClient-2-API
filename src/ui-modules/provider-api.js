@@ -121,19 +121,25 @@ function getManagedSupportedModels(providerType, providers = []) {
     );
 }
 
-async function getTierAwareAntigravityModels(providerPoolManager) {
+function wantsFullModelCatalog(req) {
+    return new URL(req.url || '/', 'http://localhost').searchParams.get('includeUnavailable') === 'true';
+}
+
+async function getTierAwareAntigravityModels(providerPoolManager, includeUnavailable = false) {
     const providerType = 'gemini-antigravity';
     if (!providerPoolManager?.providerStatus?.[providerType]?.length ||
         typeof providerPoolManager.getAllAvailableModels !== 'function') {
         return null;
     }
 
-    const availableModels = await providerPoolManager.getAllAvailableModels();
-    return normalizeModelIds(
-        availableModels
-            .filter(model => model.provider === providerType)
-            .map(model => model.model)
-    );
+    const availableModels = includeUnavailable
+        ? await providerPoolManager.getAllAvailableModels(null, { includeUnavailable: true })
+        : await providerPoolManager.getAllAvailableModels();
+    const entries = availableModels.filter(model => model.provider === providerType);
+    return {
+        models: normalizeModelIds(entries.map(model => model.model)),
+        modelStatus: Object.fromEntries(entries.map(model => [model.model, model.availability || 'unknown']))
+    };
 }
 
 async function persistProviderStatusToFile(currentConfig, providerPoolManager) {
@@ -431,6 +437,7 @@ export async function handleGetSupportedProviders(req, res, currentConfig, provi
  * 获取所有提供商的可用模型（支持动态配置组）
  */
 export async function handleGetProviderModels(req, res, currentConfig, providerPoolManager) {
+    const includeUnavailable = wantsFullModelCatalog(req);
     const registeredProviders = getRegisteredProviders();
     let providerPools = {};
 
@@ -446,16 +453,16 @@ export async function handleGetProviderModels(req, res, currentConfig, providerP
     const allModels = {};
     let antigravityModels = null;
     try {
-        antigravityModels = await getTierAwareAntigravityModels(providerPoolManager);
+        antigravityModels = await getTierAwareAntigravityModels(providerPoolManager, includeUnavailable);
     } catch (error) {
         logger.warn('[UI API] Failed to load tier-aware Antigravity models:', error.message);
-        antigravityModels = [];
+        antigravityModels = includeUnavailable ? null : { models: [] };
     }
 
     allTypes.forEach(type => {
         let models = getProviderModels(type);
         if (type === 'gemini-antigravity' && antigravityModels !== null) {
-            models = antigravityModels;
+            models = antigravityModels.models;
         }
         if (usesManagedModelList(type)) {
             const managedModels = getManagedSupportedModels(type, providerPools[type] || []);
@@ -469,7 +476,13 @@ export async function handleGetProviderModels(req, res, currentConfig, providerP
     });
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(allModels));
+    res.end(JSON.stringify(includeUnavailable ? {
+        models: allModels,
+        modelStatus: {
+            'gemini-antigravity': Object.fromEntries((allModels['gemini-antigravity'] || [])
+                .map(model => [model, antigravityModels?.modelStatus?.[model] || 'unknown']))
+        }
+    } : allModels));
     return true;
 }
 
@@ -477,16 +490,19 @@ export async function handleGetProviderModels(req, res, currentConfig, providerP
  * 获取特定提供商类型的可用模型
  */
 export async function handleGetProviderTypeModels(req, res, currentConfig, providerPoolManager, providerType) {
+    const includeUnavailable = wantsFullModelCatalog(req);
+    let modelStatus = {};
     let models = getProviderModels(providerType);
     if (providerType === 'gemini-antigravity') {
         try {
-            const antigravityModels = await getTierAwareAntigravityModels(providerPoolManager);
+            const antigravityModels = await getTierAwareAntigravityModels(providerPoolManager, includeUnavailable);
             if (antigravityModels !== null) {
-                models = antigravityModels;
+                models = antigravityModels.models;
+                modelStatus = antigravityModels.modelStatus;
             }
         } catch (error) {
             logger.warn('[UI API] Failed to load tier-aware Antigravity models:', error.message);
-            models = [];
+            if (!includeUnavailable) models = [];
         }
     } else if (usesManagedModelList(providerType)) {
         try {
@@ -502,7 +518,12 @@ export async function handleGetProviderTypeModels(req, res, currentConfig, provi
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providerType,
-        models
+        models,
+        ...(includeUnavailable ? {
+            modelStatus: providerType === 'gemini-antigravity'
+                ? Object.fromEntries(models.map(model => [model, modelStatus[model] || 'unknown']))
+                : {}
+        } : {})
     }));
     return true;
 }

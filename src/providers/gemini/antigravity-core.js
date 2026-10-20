@@ -219,7 +219,7 @@ function stripModelSuffix(modelName) {
     return match ? match[1].trim() : normalized;
 }
 
-function resolveAntigravityUpstreamModel(modelName) {
+export function resolveAntigravityUpstreamModel(modelName) {
     const baseModel = stripModelSuffix(modelName);
     if (!baseModel) return '';
     if (baseModel.startsWith('gemini-claude-')) {
@@ -1067,6 +1067,7 @@ export class AntigravityApiService {
         });
 
         this.availableModels = [];
+        this.availableModelsSource = 'unknown';
         this.isInitialized = false;
 
         this.config = config;
@@ -1430,6 +1431,7 @@ export class AntigravityApiService {
                             return true;
                         });
 
+                    this.availableModelsSource = 'upstream';
                     logger.info(`[Antigravity] Available models: [${this.availableModels.join(', ')}]`);
                     return;
                 }
@@ -1440,6 +1442,7 @@ export class AntigravityApiService {
 
         logger.warn('[Antigravity] Failed to fetch models from all endpoints. Using default models.');
         this.availableModels = ANTIGRAVITY_MODELS;
+        this.availableModelsSource = 'fallback';
     }
 
     async listModels() {

@@ -18,10 +18,29 @@
 
 其他上游目标在免费账号上仍返回不重试、不计入账号健康错误次数的本地 404。付费账号以及尚未识别 tier 的账号保持原有行为；混合账号池继续按各账号的 tier 路由和合并展示模型。
 
+**手动注册的自定义模型是显式目录条目，不是自动发现结果。** 它们按配置的列表提供商保留展示，不再与账号上游返回的模型名单取交集；这包括自定义 ID 与内置模型同名、或自定义 ID 映射到其他实际模型的情况。只有显式注册的 ID 得到展示豁免，其他内置模型仍按上述策略过滤。展示不代表已获得上游授权，实际请求仍校验最终路由的账号和模型权限。新增、编辑、删除自定义模型后，会刷新当前页面的首页模型缓存。
+
 实现位置：
 
 - `src/providers/gemini/antigravity-core.js`：别名映射、请求权限、原生模型列表与思考等级。
 - `src/providers/provider-pool-manager.js`：账号选择与聚合模型列表。
+
+## 界面全量目录与状态后缀
+
+首页、Playground 和账号模型选择器保留展示 Antigravity 的内置及自定义目录。相对于账号池最近一次模型发现结果，名称后缀含义如下：
+
+- 无后缀：至少一个套餐允许的账号实际返回过该模型（按上游目标匹配别名）。这不是对请求成功或剩余额度的保证。
+- `（上游未返回）`：套餐允许，但已取得的账号模型列表里没有该模型。
+- `（当前套餐不可用）`：账号池中所有已识别的套餐都被当前请求策略限制。
+- `（上游未确认）`：发现失败、仅使用静态后备目录、没有配置账号，或自定义模型实际路由到另一个提供商。
+
+有一个账号确认返回模型即可去掉后缀；如果仍有账号发现失败，不把“未确认”误报成确定的“未返回”。显示和可选择不代表获得调用授权，实际请求权限校验保持不变。
+
+后缀只用于显示，不进入复制内容、下拉选项值、请求模型 ID 或 `notSupportedModels` 配置。
+
+Web UI 通过 `GET /api/provider-models?includeUnavailable=true` 获取 `{ models: { provider: [id] }, modelStatus: { provider: { id: status } } }`；单提供商接口 `/api/provider-models/{provider}?includeUnavailable=true` 保留 `models` 数组，另外返回该提供商的 `modelStatus`。状态值为 `returned`、`not_returned`、`tier_restricted`、`unknown`。
+
+不带参数的原有 UI API 和对外模型列表 API 保持既有的筛选行为与数据结构，避免影响旧客户端。
 
 ## 上游依据及适用范围
 
@@ -54,7 +73,7 @@ Antigravity 新增两个客户端模型入口，但不加入免费账号白名�
 ## 回归验证
 
 ```bash
-npm test -- --runInBand tests/antigravity-models.test.js tests/antigravity-argon.test.js
+npm test -- --runInBand tests/antigravity-models.test.js tests/antigravity-argon.test.js tests/antigravity-custom-models.test.js tests/model-availability-ui.test.js
 ```
 
 覆盖旧别名及前缀/后缀规范化、Medium 思考等级、流式/非流式上游目标、免费/付费/未知 tier 列表、混合池路由、自动模式与 Playground 模型 API，以及禁止模型的 404 和账号健康状态。

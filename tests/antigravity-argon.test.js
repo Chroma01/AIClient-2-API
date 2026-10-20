@@ -55,6 +55,7 @@ describe('Antigravity Gemini 4 Argon support', () => {
             headers: expect.objectContaining({ 'User-Agent': expect.stringMatching(/^antigravity\/cli\//) })
         }));
         expect(service.availableModels).toEqual(variants.map(([model]) => model));
+        expect(service.availableModelsSource).toBe('upstream');
         const response = await service.listModels();
         expect(response.models.map(model => model.name)).toEqual(variants.map(([model]) => `models/${model}`));
         expect(response.models.every(model => model.thinking.levels.includes('high'))).toBe(true);
@@ -64,6 +65,7 @@ describe('Antigravity Gemini 4 Argon support', () => {
         const service = createService();
         service.authClient.request.mockRejectedValue(new Error('offline'));
         await service.fetchAvailableModels();
+        expect(service.availableModelsSource).toBe('fallback');
         for (const [model] of variants) expect(service.availableModels).toContain(model);
     });
 

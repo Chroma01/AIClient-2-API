@@ -7,6 +7,8 @@ import { convertData } from '../convert/convert.js';
 
 import {
     getConfiguredSupportedModels,
+    getCustomModelActualProvider,
+    customModelMatchesProvider,
     getCustomModelListProvider,
     getProviderModels,
     normalizeModelIds
@@ -1467,9 +1469,10 @@ export class ProviderPoolManager {
     /**
      * Gets all available models across all provider pools, with optional format conversion.
      * @param {string} [endpointType] - Optional endpoint type for format conversion (OPENAI_MODEL_LIST or GEMINI_MODEL_LIST).
+     * @param {{ includeUnavailable?: boolean }} options Include the full UI catalog with discovery status.
      * @returns {Promise<Object|Array>} Formatted model list or raw array of model objects.
      */
-    async getAllAvailableModels(endpointType = null) {
+    async getAllAvailableModels(endpointType = null, { includeUnavailable = false } = {}) {
         const allModels = [];
         
         // 获取所有已注册的提供商和号池中的提供商
@@ -1480,6 +1483,7 @@ export class ProviderPoolManager {
             if (this.providerStatus[providerType]) {
                 const customAliases = getCustomModelAliasesForProvider(this.globalConfig, providerType);
                 const customModelIds = getCustomModelIdsForProvider(this.globalConfig, providerType);
+                const modelAvailability = new Map();
                 const configuredSupportedModels = normalizeModelIds(
                     this.providerStatus[providerType].flatMap(providerStatus =>
                         getConfiguredSupportedModels(providerType, providerStatus.config)
@@ -1493,12 +1497,17 @@ export class ProviderPoolManager {
                     ]);
 
                 if (providerType === MODEL_PROVIDER.ANTIGRAVITY && this.providerStatus[providerType].length > 0) {
-                    const { isAntigravityModelListed } = await import('./gemini/antigravity-core.js');
-                    if (models.some(model => !isAntigravityModelListed(model, 'free-tier'))) {
+                    const {
+                        isAntigravityModelListed,
+                        isAntigravityModelRetired,
+                        resolveAntigravityUpstreamModel
+                    } = await import('./gemini/antigravity-core.js');
+                    if (includeUnavailable || models.some(model => !isAntigravityModelListed(model, 'free-tier'))) {
                         const accountAvailability = [];
                         for (const providerStatus of this.providerStatus[providerType]) {
                             let tierId;
                             let accountModelIds = null;
+                            let discoverySource = 'unknown';
                             try {
                                 const tempConfig = {
                                     ...this.globalConfig,
@@ -1514,6 +1523,7 @@ export class ProviderPoolManager {
                                             accountModelIds = new Set(nativeModelList.models
                                                 .map(model => model.name?.replace(/^models\//, ''))
                                                 .filter(Boolean));
+                                            discoverySource = serviceAdapter.antigravityApiService?.availableModelsSource || 'upstream';
                                         }
                                     } catch (err) {
                                         this._log('debug', `Failed to load Antigravity account tier for ${providerStatus.uuid}: ${err.message}`);
@@ -1523,17 +1533,51 @@ export class ProviderPoolManager {
                             } catch (err) {
                                 this._log('debug', `Failed to inspect Antigravity account tier for ${providerStatus.uuid}: ${err.message}`);
                             }
-                            accountAvailability.push({ tierId, modelIds: accountModelIds });
+                            accountAvailability.push({
+                                tierId,
+                                modelIds: accountModelIds,
+                                upstreamModelIds: accountModelIds
+                                    ? new Set([...accountModelIds].map(resolveAntigravityUpstreamModel))
+                                    : null,
+                                discoverySource
+                            });
                         }
 
-                        models = models.filter(model => {
-                            if (isAntigravityModelListed(model, 'free-tier')) return true;
-                            return accountAvailability.some(({ tierId, modelIds }) => {
-                                if (!tierId) return true;
-                                if (!isAntigravityModelListed(model, tierId)) return false;
-                                return !modelIds || modelIds.has(model);
+                        if (includeUnavailable) {
+                            const customModels = (Array.isArray(this.globalConfig.customModels) ? this.globalConfig.customModels : [])
+                                .filter(model => customModelMatchesProvider(model, providerType));
+                            for (const model of models) {
+                                const customModel = customModels.find(config => config.id?.trim() === model);
+                                const actualProvider = getCustomModelActualProvider(customModel) || providerType;
+                                if (actualProvider !== providerType) {
+                                    modelAvailability.set(model, 'unknown');
+                                    continue;
+                                }
+                                const actualModel = customModel?.actualModel || model;
+                                const upstreamModel = resolveAntigravityUpstreamModel(actualModel);
+                                const eligibleAccounts = accountAvailability.filter(account =>
+                                    !isAntigravityModelRetired(actualModel, Date.now(), account.tierId));
+                                const status = eligibleAccounts.length === 0 ? 'tier_restricted'
+                                    : eligibleAccounts.some(account => account.discoverySource === 'upstream' &&
+                                        account.upstreamModelIds?.has(upstreamModel)) ? 'returned'
+                                    : eligibleAccounts.some(account => account.discoverySource !== 'upstream') ? 'unknown'
+                                    : 'not_returned';
+                                modelAvailability.set(model, status);
+                            }
+                        } else {
+                            const explicitCustomModels = new Set(normalizeModelIds(customModelIds));
+                            models = models.filter(model => {
+                                // Manual registrations are list entries, not discovery results.
+                                // Keep them visible; actual routing still enforces account permissions.
+                                if (explicitCustomModels.has(model)) return true;
+                                if (isAntigravityModelListed(model, 'free-tier')) return true;
+                                return accountAvailability.some(({ tierId, modelIds }) => {
+                                    if (!tierId) return true;
+                                    if (!isAntigravityModelListed(model, tierId)) return false;
+                                    return !modelIds || modelIds.has(model);
+                                });
                             });
-                        });
+                        }
                     }
                 }
 
@@ -1584,7 +1628,10 @@ export class ProviderPoolManager {
                     allModels.push({
                         id: `${providerType}:${model}`,
                         provider: providerType,
-                        model: model
+                        model: model,
+                        ...(includeUnavailable && providerType === MODEL_PROVIDER.ANTIGRAVITY
+                            ? { availability: modelAvailability.get(model) || 'unknown' }
+                            : {})
                     });
                 }
             }

@@ -1077,6 +1077,9 @@ const translations = {
         'models.loadError': '加载模型列表失败',
         'models.copied': '已复制',
         'models.clickToCopy': '点击复制',
+        'models.status.notReturned': '（上游未返回）',
+        'models.status.tierRestricted': '（当前套餐不可用）',
+        'models.status.unknown': '（上游未确认）',
 
         // Guide
         'guide.title': '使用指南',
@@ -2381,6 +2384,9 @@ const translations = {
         'models.loadError': 'Failed to load models',
         'models.copied': 'Copied',
         'models.clickToCopy': 'Click to copy',
+        'models.status.notReturned': '(not returned by upstream)',
+        'models.status.tierRestricted': '(unavailable on current tiers)',
+        'models.status.unknown': '(upstream unverified)',
 
         // Guide
         'guide.title': 'User Guide',
