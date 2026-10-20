@@ -33,7 +33,23 @@ class GeminiStrategy extends ProviderStrategy {
 
     classifyResponseFailure(response) {
         // Some Gemini transports wrap the protocol response in a `response` field.
-        const candidates = response?.candidates || response?.response?.candidates;
+        const payload = response?.response || response;
+        const feedback = payload?.promptFeedback;
+        if (feedback?.blockReason && feedback.blockReason !== 'BLOCK_REASON_UNSPECIFIED') {
+            const refusalText = (Array.isArray(payload.candidates) ? payload.candidates : [])
+                .flatMap(candidate => candidate?.content?.parts || [])
+                .filter(part => !part?.thought && typeof part?.text === 'string')
+                .map(part => part.text).join('');
+            return {
+                code: 'content_filter',
+                message: feedback.blockReasonMessage || refusalText || `Gemini blocked the request (${feedback.blockReason}).`,
+                status: 400,
+                retryable: false,
+                skipErrorCount: true,
+                shouldSwitchCredential: false
+            };
+        }
+        const candidates = payload?.candidates;
         if (!Array.isArray(candidates)) return null;
 
         const candidate = candidates.find(item =>
@@ -49,6 +65,12 @@ class GeminiStrategy extends ProviderStrategy {
             skipErrorCount: true,
             shouldSwitchCredential: true
         };
+    }
+
+    isStreamComplete(response) {
+        const payload = response?.response || response;
+        return Array.isArray(payload?.candidates) && payload.candidates.some(candidate =>
+            typeof candidate?.finishReason === 'string' && candidate.finishReason.trim().length > 0);
     }
 
     extractPromptText(requestBody) {

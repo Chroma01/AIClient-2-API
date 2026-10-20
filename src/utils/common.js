@@ -895,9 +895,16 @@ export function classifyUpstreamResponseFailure(response, provider) {
     return strategy.classifyResponseFailure(response);
 }
 
-/**
- * 将协议策略返回的失败描述转换为请求层可处理的 Error。
- */
+/** Missing native completion is a protocol failure, not a successful transport EOF. */
+function createIncompleteUpstreamStreamError(providerLabel) {
+    const error = new Error(`[${providerLabel}] Upstream stream ended without a completion reason (finishReason). The response is incomplete; any preceding upstream text or refusal has been preserved.`);
+    error.status = 502;
+    error.responseFailureCode = 'INCOMPLETE_UPSTREAM_STREAM';
+    error.skipErrorCount = true;
+    return error;
+}
+
+/** 将协议策略返回的失败描述转换为请求层可处理的 Error。 */
 export function createUpstreamResponseFailureError(providerLabel = 'Upstream', failure = {}) {
     const code = failure.code || 'UPSTREAM_RESPONSE_FAILURE';
     const detail = typeof failure.message === 'string' && failure.message.trim()
@@ -906,6 +913,7 @@ export function createUpstreamResponseFailureError(providerLabel = 'Upstream', f
     const error = new Error(`[${providerLabel}] Upstream returned ${code}${detail}`);
     error.isRetryableUpstreamResponseFailure = failure.retryable === true;
     error.responseFailureCode = code;
+    if (failure.status) error.status = failure.status;
     error.responseFailureLabel = failure.label || code;
     error.responseFailureCategory = failure.retryCategory || null;
     error.shouldSwitchCredential = failure.shouldSwitchCredential === true;
@@ -1011,6 +1019,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
 
     let hasToolCall = false;
     let hasMessageStop = false; // 跟踪是否已经发送过结束标志（message_stop / done）
+    let upstreamCompletionSeen = null; // null: protocol not validated; false: missing native completion reason
     // finally 必须能访问这两个值：客户端 close、上游 throw 和无终止块 EOF 都要释放状态。
     // generateContentStream 初始化失败前 streamRequestId 仍为空，安全跳过清理。
     let needsConversion = false;
@@ -1225,6 +1234,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // fs.writeFile('request'+Date.now()+'.json', JSON.stringify(requestBody));
         // The service returns a stream in its native format (toProvider).
         needsConversion = getProtocolPrefix(fromProvider) !== getProtocolPrefix(toProvider);
+        const upstreamStrategy = ProviderStrategyFactory.getStrategy(getProtocolPrefix(toProvider));
         // 在创建 generator 前确定：若首次尝试空流/初始化失败后递归重试，外层 finally
         // 仍需知道它负责的是转换后的 Claude 流，才能用共享状态完成收尾。
         shouldNormalizeClaudeStream = clientProtocol === MODEL_PROTOCOL_PREFIX.CLAUDE && needsConversion;
@@ -1254,6 +1264,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 toProvider,
                 customName ? `${toProvider}/${customName}` : toProvider
             );
+
+            const nativeCompletion = upstreamStrategy.isStreamComplete(nativeChunk);
+            if (nativeCompletion !== null) {
+                upstreamCompletionSeen = upstreamCompletionSeen === true || nativeCompletion;
+            }
 
             // Extract text for logging purposes
             const chunkText = extractResponseText(nativeChunk, toProvider);
@@ -1385,8 +1400,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             throw createEmptyUpstreamResponseError(customName ? `${toProvider}/${customName}` : toProvider);
         }
 
+        // A transport EOF is not a Gemini completion reason. Preserve partial output,
+        // but emit an explicit error rather than inventing STOP / end_turn / [DONE].
+        if (!clientDisconnected.value && upstreamCompletionSeen === false) {
+            throw createIncompleteUpstreamStreamError(customName ? `${toProvider}/${customName}` : toProvider);
+        }
+
         // 流式请求成功完成，统计使用次数，错误次数重置为0
-        if (providerPoolManager && pooluuid) {
+        if (!clientDisconnected.value && providerPoolManager && pooluuid) {
             const customNameDisplay = customName ? `, ${customName}` : '';
             logger.info(`[Provider Pool] Increasing usage count for ${toProvider} (${pooluuid}${customNameDisplay}) after successful stream request`);
             providerPoolManager.markProviderHealthy(toProvider, {
@@ -2692,7 +2713,7 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: getErrorType(statusCode)  // OpenAI 使用 code 字段作为核心判断
+                    code: error.responseFailureCode || getErrorType(statusCode)  // Preserve normalized upstream failure codes
                 }
             };
             
@@ -2702,7 +2723,7 @@ function createErrorResponse(error, fromProvider) {
                 error: {
                     type: getErrorType(statusCode),
                     message: errorMessage,
-                    code: getErrorType(statusCode)
+                    code: error.responseFailureCode || getErrorType(statusCode)
                 }
             };
             
@@ -2777,7 +2798,7 @@ function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: null
+                    code: error.responseFailureCode || null
                 }
             };
             return `data: ${JSON.stringify(openaiError)}\n\n`;
@@ -2791,7 +2812,7 @@ function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     type: getErrorType(statusCode),
                     message: errorMessage,
-                    code: getErrorType(statusCode)
+                    code: error.responseFailureCode || getErrorType(statusCode)
                 }
             };
             return `event: error\ndata: ${JSON.stringify(responsesError)}\n\n`;
@@ -2826,7 +2847,7 @@ function createStreamErrorResponse(error, fromProvider) {
                 error: {
                     message: errorMessage,
                     type: getErrorType(statusCode),
-                    code: null
+                    code: error.responseFailureCode || null
                 }
             };
             return `data: ${JSON.stringify(defaultError)}\n\n`;
