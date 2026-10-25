@@ -43,13 +43,13 @@ export function createAntigravityQuotaUsageLoader({ apiClient } = {}) {
     };
 
     return async function loadAntigravityQuotaUsage(providers = []) {
-        const healthyProviders = providers.filter(provider => provider?.isHealthy && !provider.isDisabled);
-        const accountUsage = await mapWithLimit(
-            healthyProviders.filter(provider => provider.uuid),
-            fetchAccountQuota
-        );
+        // Include unhealthy accounts: quota exhaustion for one model family marks the
+        // account unavailable, but its other family (Gemini vs Claude) can still have
+        // quota. Quota is therefore queried for every enabled account.
+        const enabledProviders = providers.filter(provider => provider?.uuid && !provider.isDisabled);
+        const accountUsage = await mapWithLimit(enabledProviders, fetchAccountQuota);
 
-        const totalPercent = healthyProviders.length * 100;
+        const totalPercent = enabledProviders.length * 100;
         return Object.fromEntries(['gemini', 'claude'].map(family => {
             const percentages = accountUsage.map(quota => {
                 const familyQuota = quota?.[family];
@@ -61,7 +61,7 @@ export function createAntigravityQuotaUsageLoader({ apiClient } = {}) {
                     ? Math.round(Math.min(100, Math.max(0, usedPercentage)))
                     : null;
             });
-            const available = percentages.every(percentage => percentage !== null);
+            const available = percentages.length > 0 && percentages.every(percentage => percentage !== null);
 
             return [family, {
                 available,

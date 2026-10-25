@@ -1,7 +1,7 @@
 import { createAntigravityQuotaUsageLoader } from '../static/app/antigravity-quota-summary.js';
 
 describe('Antigravity provider quota summary', () => {
-    test('sums each healthy enabled account usage percentage', async () => {
+    test('sums each enabled account, including accounts quarantined for another family', async () => {
         const providers = [
             { uuid: 'antigravity-a', isHealthy: true },
             { uuid: 'antigravity-b', isHealthy: true, isDisabled: false },
@@ -22,14 +22,15 @@ describe('Antigravity provider quota summary', () => {
         const loadUsage = createAntigravityQuotaUsageLoader({ apiClient });
 
         await expect(loadUsage(providers)).resolves.toEqual({
-            gemini: { available: true, usedPercent: 104, totalPercent: 200 },
-            claude: { available: true, usedPercent: 57, totalPercent: 200 }
+            gemini: { available: true, usedPercent: 184, totalPercent: 300 },
+            claude: { available: true, usedPercent: 72, totalPercent: 300 }
         });
-        expect(apiClient.get).toHaveBeenCalledTimes(2);
+        expect(apiClient.get).toHaveBeenCalledTimes(3);
         expect(apiClient.get).toHaveBeenCalledWith('/providers/gemini-antigravity/antigravity-a/quota');
+        expect(apiClient.get).toHaveBeenCalledWith('/providers/gemini-antigravity/antigravity-c/quota');
     });
 
-    test('marks the total unavailable when a healthy account quota cannot be read', async () => {
+    test('marks the total unavailable when an enabled account quota cannot be read', async () => {
         const apiClient = { get: jest.fn().mockRejectedValue(new Error('request failed')) };
         const loadUsage = createAntigravityQuotaUsageLoader({ apiClient });
 
@@ -39,13 +40,13 @@ describe('Antigravity provider quota summary', () => {
         });
     });
 
-    test('returns zero usage without requests when there are no healthy enabled accounts', async () => {
+    test('returns unavailable without requests when there are no enabled accounts', async () => {
         const apiClient = { get: jest.fn() };
         const loadUsage = createAntigravityQuotaUsageLoader({ apiClient });
 
-        await expect(loadUsage([{ uuid: 'antigravity-a', isHealthy: false }])).resolves.toEqual({
-            gemini: { available: true, usedPercent: 0, totalPercent: 0 },
-            claude: { available: true, usedPercent: 0, totalPercent: 0 }
+        await expect(loadUsage([{ uuid: 'antigravity-a', isDisabled: true }])).resolves.toEqual({
+            gemini: { available: false, usedPercent: null, totalPercent: 0 },
+            claude: { available: false, usedPercent: null, totalPercent: 0 }
         });
         expect(apiClient.get).not.toHaveBeenCalled();
     });
