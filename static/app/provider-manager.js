@@ -11,7 +11,6 @@ import { updateUsageProviderConfigs } from './usage-manager.js';
 import { updateConfigProviderConfigs } from './config-manager.js';
 import { loadConfigList, updateProviderFilterOptions } from './upload-config-manager.js';
 import { setServiceMode } from './event-handlers.js';
-import { createAntigravityQuotaUsageLoader } from './antigravity-quota-summary.js';
 
 // 保存初始服务器时间和运行时间
 let initialServerTime = null;
@@ -20,7 +19,6 @@ let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
 let latestProvidersAccessInfo = null;
-const loadAntigravityQuotaUsage = createAntigravityQuotaUsageLoader({ apiClient: window.apiClient });
 
 function navigateToSection(sectionId) {
     const navItem = document.querySelector(`.nav-item[data-section="${sectionId}"]`);
@@ -458,15 +456,6 @@ function renderProviders(providers, supportedProviders = []) {
                     <span class="provider-stat-label" data-i18n="providers.stat.errorCount">${t('providers.stat.errorCount')}</span>
                     <span class="provider-stat-value">${errorCount}</span>
                 </div>
-                ${providerType === 'gemini-antigravity' ? `
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.antigravityGeminiQuota">${t('providers.stat.antigravityGeminiQuota')}</span>
-                    <span class="provider-stat-value" data-antigravity-gemini-quota>${t('providers.antigravityQuota.loading')}</span>
-                </div>
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.antigravityClaudeQuota">${t('providers.stat.antigravityClaudeQuota')}</span>
-                    <span class="provider-stat-value" data-antigravity-claude-quota>${t('providers.antigravityQuota.loading')}</span>
-                </div>` : ''}
             </div>
         `;
 
@@ -482,20 +471,6 @@ function renderProviders(providers, supportedProviders = []) {
         });
 
         container.appendChild(providerDiv);
-
-        if (providerType === 'gemini-antigravity') {
-            const geminiQuota = providerDiv.querySelector('[data-antigravity-gemini-quota]');
-            const claudeQuota = providerDiv.querySelector('[data-antigravity-claude-quota]');
-            loadAntigravityQuotaUsage(accounts).then(summary => {
-                if (!geminiQuota?.isConnected || !claudeQuota?.isConnected) return;
-                geminiQuota.textContent = summary.gemini.available
-                    ? `${summary.gemini.usedPercent}/${summary.gemini.totalPercent}%`
-                    : t('providers.antigravityQuota.unavailable');
-                claudeQuota.textContent = summary.claude.available
-                    ? `${summary.claude.usedPercent}/${summary.claude.totalPercent}%`
-                    : t('providers.antigravityQuota.unavailable');
-            });
-        }
 
         // 为添加分组按钮添加事件监听
         const addGroupBtn = providerDiv.querySelector('.add-group-btn');
